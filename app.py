@@ -92,14 +92,10 @@ def fetch_real_tw_history(stock_id):
                     data = res.json()
                     if "aaData" in data and data["aaData"]:
                         df_raw_month = pd.DataFrame(data["aaData"])
-                        # 🟢 徹底修正：精確對齊櫃買中心欄位並安全指定索引名稱
-                        df_month = pd.DataFrame()
-                        df_month["Date"] = df_raw_month[0]
-                        df_month["Volume"] = df_raw_month[1]
-                        df_month["Open"] = df_raw_month[3]
-                        df_month["High"] = df_raw_month[4]
-                        df_month["Low"] = df_raw_month[5]
-                        df_month["Close"] = df_raw_month[6]
+                        # 🟢 徹底修正：使用標準切片與安全重命名，避開無效語法 Bug
+                        # 櫃買中心欄位索引說明：0日期, 1成交股數, 3開盤, 4最高, 5最低, 6收盤
+                        df_month = df_raw_month.iloc[:, [0, 1, 3, 4, 5, 6]].copy()
+                        df_month.columns = ["Date", "Volume", "Open", "High", "Low", "Close"]
                         df_list.append(df_month)
                         if "stkName" in data:
                             company_name = data["stkName"]
@@ -249,9 +245,9 @@ try:
         
         if score >= 2:
             st.info("📋 **建議：順勢續抱 / 逢回拉回買進**")
-st.caption("基於中線多頭架構未破，技術面未見高檔過熱，可沿主軌均線分批加碼或抱緊波段。")
-elif score == 1:
-st.warning("📋 建議：區間操作 / 觀望縮小部位")
+            st.caption("基於中線多頭架構未破，技術面未見高檔過熱，可沿主軌均線分批加碼或抱緊波段。")
+        elif score == 1:
+            st.warning("📋 **建議：區間操作 / 觀望縮小部位**")
 st.caption("指標交織，個股進入整理期。建議拉大買賣價位，切勿追漲殺跌。")
 else:
 st.error("📋 建議：保守減碼 / 現金為王防禦")
@@ -267,7 +263,7 @@ if close_price >= ma5_now:
 if close_price >= ma20_now:
     st.markdown(f"🔴 建議保命停損 (月線 / 20MA)：{ma20_now:.2f} (一旦跌破此線必須出場)")
 else:
-st.markdown(f"🚨 保命停損確認 (月線 / 20MA)：{ma20_now:.2f} (已全線跌破！不可盲目摸底承接)")\
+st.markdown(f"🚨 保命停損確認 (月線 / 20MA)：{ma20_now:.2f} (已全線跌破！不可盲目摸底承接)")
 
 except Exception as e:
 st.error(f"💥 系統量化計算異常: {e}")
