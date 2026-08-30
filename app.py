@@ -23,21 +23,9 @@ US_COMPANY_NAMES_TW = {
     "TSM": "台積電 ADR"
 }
 
-# 1. 修正後的快取函數：改回 cache_resource 並加入瀏覽器偽裝
-@st.cache_resource(ttl=300)  # 快取 5 分鐘，改用 resource 儲存連線物件
-def fetch_stock_data(ticker):
-    import requests
-    
-    # 建立客製化 Session 偽裝成一般 Chrome 瀏覽器
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    })
-    
-    # 將偽裝好的 session 帶入 Ticker
-    stock = yf.Ticker(ticker, session=session)
-    return stock
-
+# 1. 設定 App 頁面標題與佈局
+st.set_page_config(page_title="Python 自動化股市儀表板", layout="wide")
+st.title("📈 Python 自動化股市監控與 AI 決策系統")
 
 # 2. 側邊欄設定
 st.sidebar.header("⚙️ 參數設定")
@@ -59,26 +47,10 @@ current_time = datetime.now()
 st.sidebar.write(f"🕒 系統最後更新時間:\n{current_time.strftime('%Y-%m-%d')} ({WEEK_DAYS_TW[current_time.weekday()]}) {current_time.strftime('%H:%M:%S')}")
 
 # 3. 定義資料抓取函數 (為了均線計算防呆，一律抓取更長線的資料後再截取)
-@st.cache_data(ttl=300)  # 快取 5 分鐘，避免頻繁請求
+@st.cache_resource(ttl=60)
 def fetch_stock_data(ticker):
-    import requests
-    
-    # 建立一個客製化的 Session 偽裝成一般 Chrome 瀏覽器外殼
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    })
-    
-    # 將偽裝好的 session 餵給 yfinance
-    stock = yf.Ticker(ticker, session=session)
-    
-    # 移除會報錯的 proxy 和 user_agent 參數
-    df_history = stock.history(
-        period="1y", 
-        auto_adjust=True
-    )
-    return stock, df_history
-
+    stock = yf.Ticker(ticker)
+    return stock
 
 # 4. 執行抓取並呈現數據
 try:
@@ -87,11 +59,9 @@ try:
 
     with st.spinner('🔄 正在從網路自動抓取最新股市數據並進行量化分析...'):
         stock_obj = fetch_stock_data(ticker_input)
-        # 根據畫面上選擇的範圍動態調整（若選短天期，背景一律多抓，確保能算出 60MA 季線）
-        fetch_period = "1y" if period_mapping[period_display] in ["1mo", "3mo", "6mo", "1y"] else "5y"
-        df = stock_obj.history(period=fetch_period, auto_adjust=True)
+        # 為了確保能算出季線 (60MA)，一律多抓一點歷史資料
+        df = stock_obj.history(period="1y" if period_mapping[period_display] in ["1mo", "3mo", "6mo", "1y"] else "5y")
         info = stock_obj.info
-
     
     if df.empty:
         st.error("❌ 找不到該股票數據，請檢查代號是否正確。")
