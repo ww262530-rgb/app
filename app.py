@@ -1,4 +1,3 @@
-import streamlit as pd
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,7 +10,7 @@ WEEK_DAYS_TW = ["週一", "週二", "週三", "週四", "週五", "週六", "週
 
 # 1. 設定 App 頁面標題與佈局
 st.set_page_config(page_title="Python 自動化股市儀表板", layout="wide")
-st.title("📈 Python 自動化股市監控與 AI 決策系統 (官方 OpenAPI 終極抗封鎖版)")
+st.title("📈 Python 自動化股市監控與 AI 決策系統")
 
 # 2. 側邊欄設定
 st.sidebar.header("⚙️ 參數設定")
@@ -30,14 +29,13 @@ current_time = datetime.now()
 st.sidebar.write(f"🕒 系統最後更新時間:\n{current_time.strftime('%Y-%m-%d')} ({WEEK_DAYS_TW[current_time.weekday()]}) {current_time.strftime('%H:%M:%S')}")
 
 # 3. 核心數據引擎：臺灣證券交易所官方 OpenAPI 盤後個股日成交大數據通道 (100% 永久不擋 IP)
-@st.cache_data(ttl=600)  # 快取 10 分鐘，兼顧最新數據與系統流暢度
+@st.cache_data(ttl=600)  # 快取 10 分鐘
 def fetch_official_twse_openapi(stock_id):
     """
     介接臺灣證券交易所（TWSE）及櫃買中心官方 OpenAPI，獲取真實上市、上櫃個股與 ETF 的完整近期歷史日線數據。
     """
-    # 官方不擋 IP 的全市場日成交行情快照接口
     url_twse = "https://twse.com.tw"
-    url_tpex = "https://tpex.org.tw"  # 擴充支援上櫃股票
+    url_tpex = "https://tpex.org.tw"  # 支援上櫃股票
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
@@ -65,7 +63,10 @@ def fetch_official_twse_openapi(stock_id):
             
         # 建立 DataFrame 並清洗數值
         df_raw = pd.DataFrame(target_rows)
-        company_name = target_rows[0].get('Name', company_name)
+        
+        # 安全取名邏輯
+        if 'Name' in df_raw.columns and not df_raw['Name'].empty:
+            company_name = df_raw['Name'].iloc[0]
         
         df_clean = pd.DataFrame()
         # 轉換官方 OpenAPI 欄位
@@ -75,10 +76,9 @@ def fetch_official_twse_openapi(stock_id):
         df_clean['Close'] = pd.to_numeric(df_raw['ClosePrice'].astype(str).str.replace(',', ''), errors='coerce')
         df_clean['Volume'] = pd.to_numeric(df_raw['TradeVolume'].astype(str).str.replace(',', ''), errors='coerce')
         
-        # 官方快照為最新排序，為確保 K 線與均線計算（如滾動滾算 rolling）正確，需重建標準交易日索引並排序
+        # 重建標準交易日索引並排序
         total_rows = len(df_clean)
         if total_rows < 5:
-            # 防止天數過少無法計算 MA，自動以平滑時序補足前序基底
             return pd.DataFrame(), company_name
             
         date_range = pd.date_range(end=datetime.now(), periods=total_rows, freq='B')
@@ -104,7 +104,7 @@ try:
         st.error("🚨 無法取得真實股價數據。原因：股票代號輸入錯誤，或是官方伺服器正於盤後維護中。")
         st.info("💡 提示：請輸入純數字（例如 2330、0050、2454、5483），官方新版 OpenAPI 通道不需帶有任何英文字尾。")
     else:
-        # --- 5. 計算 100% 精確真實量化指標 ---
+        # --- 5. 計算真實量化指標 ---
         df['MA5'] = df['Close'].rolling(window=5).mean()
         df['MA20'] = df['Close'].rolling(window=20).mean()
         df['MA60'] = df['Close'].rolling(window=60).mean()
@@ -154,7 +154,7 @@ try:
         fig.update_layout(xaxis_rangeslider_visible=False, template="plotly_dark", height=450, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- 8. 完全還原第一版：量化分析與策略操作建議 💥 ---
+        # --- 8. 量化分析與策略操作建議 ---
         st.markdown("### 🎯 量化分析與策略操作建議")
         
         ma5_now = float(latest_data['MA5'])
@@ -192,7 +192,7 @@ try:
             else:
                 st.error("🔴 **長期趨勢**：季線之下 (長線熊市格局)")
 
-        # 欄位二：買賣點訊號提示 (放空與 RSI)
+        # 欄位二：買賣點訊號提示
         with ai_col2:
             st.markdown("#### 🎯 買賣點訊號提示")
             st.markdown(f"📊 **目前 RSI (14) 指數**：`{rsi_val:.1f}`")
@@ -217,7 +217,7 @@ try:
                 st.info("⚪ **評估結果：暫不建議放空**")
                 st.caption("原因：目前股價仍受核心均線支持，或是處於箱型橫盤，放空極易被軋，建議多看少動。")
 
-        # 欄位三：整合操作策略建議 (精準連動動態週線、月線真實價格)
+        # 欄位三：整合操作策略建議
         with ai_col3:
             st.markdown("#### 💡 整合操作策略建議")
             
@@ -239,7 +239,6 @@ try:
             st.markdown("---")
             st.markdown("📐 **量化價位參考點**")
             
-            # 智慧轉換提示文字，完美排除「急跌線下」的價位疑惑
             if close_price >= ma5_now:
                 st.markdown(f"🟢 **建議波段買點 (週線 / 5MA)**：`{ma5_now:.2f}` (現價在線上，拉回不破可分批)")
             else:
@@ -248,3 +247,7 @@ try:
             if close_price >= ma20_now:
                 st.markdown(f"🔴 **建議保命停損 (月線 / 20MA)**：`{ma20_now:.2f}` (一旦跌破此線必須出場)")
             else:
+                st.markdown(f"🚨 **保命停損確認 (月線 / 20MA)**：`{ma20_now:.2f}` (已全線跌破！不可盲目摸底承接)")
+
+except Exception as e:
+    st.error(f"💥 系統初始化異常: {e}")
