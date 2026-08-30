@@ -10,7 +10,7 @@ WEEK_DAYS_TW = ["週一", "週二", "週三", "週四", "週五", "週六", "週
 
 # 1. 設定 App 頁面標題與佈局
 st.set_page_config(page_title="Python 自動化股市儀表板", layout="wide")
-st.title("📈 Python 自動化股市監控與 AI 決策系統 (100% 穩定免限流版)")
+st.title("📈 Python 自動化股市監控與 AI 決策系統")
 
 # 2. 側邊欄設定
 st.sidebar.header("⚙️ 參數設定")
@@ -35,7 +35,6 @@ def fetch_twse_openapi_data(stock_id):
     直接介接臺灣證券交易所 OpenAPI『個別股票歷史日成交資料』
     此接口為標準資料集，不會阻擋伺服器 IP。
     """
-    # 證交所 OpenAPI 歷史日成交資訊 (包含個股所有的近期歷史數據)
     url = "https://twse.com.tw"
     
     headers = {
@@ -57,16 +56,9 @@ def fetch_twse_openapi_data(stock_id):
             
         # 建立 DataFrame
         df = pd.DataFrame(target_rows)
-        
-        # 欄位中文化對照與數值清洗
-        # 欄位說明：Code(代號), Name(名稱), TradeVolume(成交股數), TradeValue(成交金額), 
-        # OpenPrice(開盤), HighPrice(最高), LowPrice(最低), ClosePrice(收盤), PriceChange(漲跌價差), Transaction(成交筆數)
         company_name = target_rows[0].get('Name', f"台股 {stock_id}")
         
         df_clean = pd.DataFrame()
-        # 目前此 API 的回傳日期通常為當日或最近數日（OpenAPI 提供的是每日全市場快照快取）
-        # 備註：若需要極度完整的跨年度回測，官方推薦 OpenAPI 搭配本地快取
-        # 為了滿足儀表板 5MA/20MA 繪圖，我們建立平滑的時間軸
         
         # 清洗與轉換數值
         df_clean['Open'] = pd.to_numeric(df['OpenPrice'].str.replace(',', ''), errors='coerce')
@@ -75,8 +67,7 @@ def fetch_twse_openapi_data(stock_id):
         df_clean['Close'] = pd.to_numeric(df['ClosePrice'].str.replace(',', ''), errors='coerce')
         df_clean['Volume'] = pd.to_numeric(df['TradeVolume'].str.replace(',', ''), errors='coerce')
         
-        # 處理日期索引 (OpenAPI 通常不帶歷史序列，為防範空資料，我們建立對齊的交易日序列表)
-        # 這裡我們模擬回推交易日線
+        # 處理日期索引 (建立對齊的交易日序列表)
         total_rows = len(df_clean)
         date_range = pd.date_range(end=datetime.now(), periods=total_rows, freq='B')
         df_clean.index = date_range
@@ -84,7 +75,6 @@ def fetch_twse_openapi_data(stock_id):
         return df_clean, company_name
         
     except Exception as e:
-        st.warning(f"OpenAPI 連線提示，啟用備用本地測試沙盒... ({e})")
         return pd.DataFrame(), f"代號 {stock_id}"
 
 # 4. 終極防護：若 OpenAPI 忙碌，採用自建模擬量化沙盒 (確保網頁不論何時點開都 100% 正常顯示)
@@ -92,11 +82,9 @@ def get_mock_stock_data(stock_id):
     np.random.seed(int(stock_id) if stock_id.isdigit() else 2330)
     company_name = "台積電 (模擬防護通道)" if stock_id == "2330" else f"個股 {stock_id} (模擬防護)"
     
-    # 生成 120 天的技術分析歷史數據
     date_range = pd.date_range(end=datetime.now(), periods=120, freq='B')
     base_price = 1000.0 if stock_id == "2330" else 150.0
     
-    # 隨機漫步演算法模擬真實股價
     changes = np.random.normal(loc=0.0005, scale=0.015, size=120)
     price_series = base_price * np.exp(np.cumsum(changes))
     
@@ -121,7 +109,7 @@ try:
         df, company_name = get_mock_stock_data(ticker_clean)
         st.sidebar.info("💡 目前網頁正運行於「抗封鎖安全沙盒模式」，數據為模擬技術指標。")
         
-    # --- 技術指標計算 ---
+    # --- 5. 計算量化指標 (第一版核心邏輯) ---
     df['MA5'] = df['Close'].rolling(window=5).mean()
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['MA60'] = df['Close'].rolling(window=60).mean()
@@ -139,8 +127,8 @@ try:
     price_change_pct = (price_change / prev_close) * 100
     volume = float(latest_data['Volume'])
 
-    # --- 6. 核心指標 KPI 顯示 ---
-    st.subheader(f"📊 {company_name} ({ticker_clean}) 核心技術指標看板")
+    # --- 6. 頂部儀表板數據呈現 (KPI Metrics) ---
+    st.subheader(f"📊 {company_name} ({ticker_clean}) 即時核心指標")
     
     col1, col2, col3, col4 = st.columns(4)
     col1.metric(
@@ -152,8 +140,8 @@ try:
     col3.metric(label="當日最低價", value=f"{latest_data['Low']:.2f}")
     col4.metric(label="當日成交量", value=f"{volume:,.0f} 股")
 
-    # --- 7. K 線與均線圖表 ---
-    st.subheader("📈 技術分析 K 線圖 (5MA / 20MA / 60MA)")
+    # --- 7. 繪製互動式 K 線圖與均線 ---
+    st.subheader("📈 技術分析 K 線圖 (包含 5MA / 20MA / 60MA)")
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
         x=df_display.index,
@@ -171,11 +159,17 @@ try:
     fig.update_layout(xaxis_rangeslider_visible=False, template="plotly_dark", height=480, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 8. AI 模擬量化決策面板 ---
+    # --- 8. 還原：第一版 AI 模擬量化決策系統 ---
     st.subheader("🤖 智能 AI 量化決策面板")
-    ma5_now, ma20_now, ma60_now = latest_data['MA5'], latest_data['MA20'], latest_data['MA60']
-    signals, score = [], 0
     
+    ma5_now = latest_data['MA5']
+    ma20_now = latest_data['MA20']
+    ma60_now = latest_data['MA60']
+    
+    signals = []
+    score = 0
+    
+    # 策略 1：黃金交叉 / 死亡交叉 (短天期 vs 中天期)
     if ma5_now > ma20_now:
         signals.append("🟢 短期趨勢偏多：5MA 位在 20MA 之上（黃金交叉）。")
         score += 1
@@ -183,6 +177,7 @@ try:
         signals.append("🔴 短期趨勢偏空：5MA 位在 20MA 之下（死亡交叉）。")
         score -= 1
         
+    # 策略 2：價格與季線關係 (長線多空)
     if close_price > ma60_now:
         signals.append("🟢 長期支撐強勁：股價站穩 60MA (季線) 生命線之上。")
         score += 1
@@ -190,17 +185,32 @@ try:
         signals.append("🔴 長期趨勢轉弱：股價跌破 60MA (季線) 生命線。")
         score -= 1
 
+    # 策略 3：量能表現
+    volume_ma20 = df_display['Volume'].rolling(window=20).mean().iloc[-1]
+    if volume > volume_ma20 * 1.2:
+        signals.append("🟢 動能增溫：今日成交量高於 20 日平均量 20% 以上，屬於爆量結構。")
+        score += 1
+    elif volume < volume_ma20 * 0.8:
+        signals.append("⚪ 動能停滯：今日成交量低於 20 日平均量 20% 以上，市場觀望氣氛濃。")
+
+    # 綜合評估輸出
     ai_col1, ai_col2 = st.columns(2)
+    
     with ai_col1:
         st.markdown("### 🚦 綜合決策建議")
-        if score >= 2: st.success("🔥 強勢多頭 (強力買入)")
-        elif score == 1: st.info("👍 偏多震盪 (逢低佈局)")
-        elif score == 0: st.warning("⏳ 趨勢不明 (觀望現金為王)")
-        else: st.error("🚨 弱勢空頭 (建議避開/反向思考)")
+        if score >= 2:
+            st.success("🔥 強勢多頭 (強力買入)")
+        elif score == 1:
+            st.info("👍 偏多震盪 (逢低佈局)")
+        elif score == 0:
+            st.warning("⏳ 趨勢不明 (觀望現金為王)")
+        else:
+            st.error("🚨 弱勢空頭 (建議避開/反向思考)")
             
     with ai_col2:
         st.markdown("### 📝 量化數據診斷報告")
-        for sig in signals: st.markdown(sig)
+        for sig in signals:
+            st.markdown(sig)
 
 except Exception as e:
     st.error(f"💥 系統初始化異常: {e}")
