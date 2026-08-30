@@ -47,18 +47,22 @@ current_time = datetime.now()
 st.sidebar.write(f"🕒 系統最後更新時間:\n{current_time.strftime('%Y-%m-%d')} ({WEEK_DAYS_TW[current_time.weekday()]}) {current_time.strftime('%H:%M:%S')}")
 
 # 3. 定義資料抓取函數 (為了均線計算防呆，一律抓取更長線的資料後再截取)
-# 修改後的防封鎖代碼：
-@st.cache_data(ttl=300)  # 將快取時間延長至 5 分鐘，避免每次操作都重新向 Yahoo 發送請求
+@st.cache_data(ttl=300)  # 快取 5 分鐘，避免頻繁請求
 def fetch_stock_data(ticker):
-    # 使用 yfinance 的 Ticker 物件
-    stock = yf.Ticker(ticker)
+    import requests
     
-    # 【核心優化】強制要求歷史數據下載時，偽裝成一般網頁瀏覽器，並開啟自動修復機制
-    # 這能極大程度避免 "Too Many Requests" 的限制
+    # 建立一個客製化的 Session 偽裝成一般 Chrome 瀏覽器外殼
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    })
+    
+    # 將偽裝好的 session 餵給 yfinance
+    stock = yf.Ticker(ticker, session=session)
+    
+    # 移除會報錯的 proxy 和 user_agent 參數
     df_history = stock.history(
         period="1y", 
-        proxy=None, 
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         auto_adjust=True
     )
     return stock, df_history
