@@ -23,9 +23,21 @@ US_COMPANY_NAMES_TW = {
     "TSM": "台積電 ADR"
 }
 
-# 1. 設定 App 頁面標題與佈局
-st.set_page_config(page_title="Python 自動化股市儀表板", layout="wide")
-st.title("📈 Python 自動化股市監控與 AI 決策系統")
+# 1. 修正後的快取函數：改回 cache_resource 並加入瀏覽器偽裝
+@st.cache_resource(ttl=300)  # 快取 5 分鐘，改用 resource 儲存連線物件
+def fetch_stock_data(ticker):
+    import requests
+    
+    # 建立客製化 Session 偽裝成一般 Chrome 瀏覽器
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    })
+    
+    # 將偽裝好的 session 帶入 Ticker
+    stock = yf.Ticker(ticker, session=session)
+    return stock
+
 
 # 2. 側邊欄設定
 st.sidebar.header("⚙️ 參數設定")
@@ -74,9 +86,12 @@ try:
     is_taiwan_stock = ticker_upper.endswith(".TW") or ticker_upper.endswith(".TWO")
 
     with st.spinner('🔄 正在從網路自動抓取最新股市數據並進行量化分析...'):
-        # 修改後的：
-        stock_obj, df = fetch_stock_data(ticker_input)
+        stock_obj = fetch_stock_data(ticker_input)
+        # 根據畫面上選擇的範圍動態調整（若選短天期，背景一律多抓，確保能算出 60MA 季線）
+        fetch_period = "1y" if period_mapping[period_display] in ["1mo", "3mo", "6mo", "1y"] else "5y"
+        df = stock_obj.history(period=fetch_period, auto_adjust=True)
         info = stock_obj.info
+
     
     if df.empty:
         st.error("❌ 找不到該股票數據，請檢查代號是否正確。")
