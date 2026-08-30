@@ -3,7 +3,8 @@ import yfinance as yf
 import plotly.graph_objects as go
 import numpy as np
 import twstock  # 引入本地台股代碼庫，確保 100% 台股中文翻譯
-from datetime import datetime
+import requests
+from datetime import datetime, timedelta
 
 # 星期幾中文對照
 WEEK_DAYS_TW = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
@@ -31,7 +32,6 @@ st.title("📈 Python 自動化股市監控與 AI 決策系統")
 st.sidebar.header("⚙️ 參數設定")
 ticker_input = st.sidebar.text_input("輸入股票代號 (例如: 2330.TW, AAPL, 0050.TW)", value="2330.TW")
 
-# 時間範圍中文化（為了計算中長期均線，預設拉長資料庫抓取範圍，前端顯示維持原樣）
 period_mapping = {
     "近 1 個月": "1mo",
     "近 3 個月": "3mo",
@@ -39,210 +39,192 @@ period_mapping = {
     "近 1 年": "1y",
     "近 5 年": "5y"
 }
-period_display = st.sidebar.selectbox("資料時間範圍", options=list(period_mapping.keys()), index=2) # 預設改近6個月更利於趨勢分析
+period_display = st.sidebar.selectbox("資料時間範圍", options=list(period_mapping.keys()), index=2)
 
-# 顯示最後更新時間
 st.sidebar.markdown("---")
 current_time = datetime.now()
 st.sidebar.write(f"🕒 系統最後更新時間:\n{current_time.strftime('%Y-%m-%d')} ({WEEK_DAYS_TW[current_time.weekday()]}) {current_time.strftime('%H:%M:%S')}")
 
-# 3. 定義資料抓取函數 (為了均線計算防呆，一律抓取更長線的資料後再截取)
-@st.cache_resource(ttl=60)
-def fetch_stock_data(ticker):
-    stock = yf.Ticker(ticker)
-    return stock
+# 3. 建立自訂 Requests Session 繞過限流 (核心修正)
+@st.cache_resource
+def get_headers_session():
+    session = requests.Session()
+    # 模擬一般瀏覽器發出請求，避免被 Yahoo 偵測為自動化腳本
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://yahoo.com'
+    })
+    return session
 
-# 4. 執行抓取並呈現數據
+# 4. 定義更安全的資料抓取函數 (加長快取時間至 5 分鐘，減少伺服器請求次數)
+@st.cache_data(ttl=300)
+def fetch_stock_data_safe(ticker, period_select):
+    session = get_headers_session()
+    
+    # 決定要抓取的長度以計算 60MA
+    required_period = "1y" if period_select in ["1mo", "3mo", "6mo", "1y"] else "5y"
+    
+    # 1. 抓取 K 線歷史數據（使用 download 搭配 session 通常比 history 穩定）
+    df = yf.download(ticker, period=required_period, session=session, progress=False)
+    
+    # 2. 抓取基本面資料 (包覆在 try-except 內防止 info 接口報錯導致整個程式掛掉)
+    info = {}
+    try:
+        stock_obj = yf.Ticker(ticker, session=session)
+        info = stock_obj.info
+    except Exception:
+        pass # 如果 info 接口被限流，依然允許程式繼續執行 K 線分析
+        
+    return df, info
+
+# 5. 執行抓取並呈現數據
 try:
-    ticker_upper = ticker_input.upper()
+    ticker_upper = ticker_input.upper().strip()
     is_taiwan_stock = ticker_upper.endswith(".TW") or ticker_upper.endswith(".TWO")
 
     with st.spinner('🔄 正在從網路自動抓取最新股市數據並進行量化分析...'):
-        stock_obj = fetch_stock_data(ticker_input)
-        # 為了確保能算出季線 (60MA)，一律多抓一點歷史資料
-        df = stock_obj.history(period="1y" if period_mapping[period_display] in ["1mo", "3mo", "6mo", "1y"] else "5y")
-        info = stock_obj.info
+        df, info = fetch_stock_data_safe(ticker_upper, period_mapping[period_display])
     
     if df.empty:
-        st.error("❌ 找不到該股票數據，請檢查代號是否正確。")
+        st.error("❌ 找不到該股票數據或被 Yahoo Finance 暫時限流，請稍後再試或檢查代號是否正確。")
     else:
+        # 處理 yf.download 可能產生的 MultiIndex 欄位結構
+        if isinstance(df.columns, go.layout.Template) or hasattr(df.columns, 'levels'):
+            df.columns = df.columns.get_level_values(0)
+
         # --- 💥 超級智能中文名稱辨識邏輯 ---
-        company_name = ""
-        if is_taiwan_stock:
-            raw_code = ticker_upper.split('.')[0]
-            if raw_code in twstock.codes:
-                tw_info = twstock.codes[raw_code]
-                company_name = f"{tw_info.name} ({raw_code})"
-            else:
-                company_name = info.get('shortName') or info.get('longName') or ticker_upper
+        company_name = "未知公司"
+        
+        if not is_taiwan_stock and ticker_upper in US_COMPANY_NAMES_TW:
+            company_name = US_COMPANY_NAMES_TW[ticker_upper]
         else:
-            company_name = US_COMPANY_NAMES_TW.get(ticker_upper, info.get('shortName') or info.get('longName') or ticker_upper)
-
-        # --- 🛡️ 安全排除 NaN (空數值) 防錯機制 ---
-        df_clean = df.dropna(subset=['Close', 'Open', 'High', 'Low']).copy()
-        
-        # --- 📈 核心量化指標計算 (均線 & RSI) ---
-        df_clean['MA5'] = df_clean['Close'].rolling(window=5).mean()    # 短期：週線
-        df_clean['MA20'] = df_clean['Close'].rolling(window=20).mean()  # 中期：月線
-        df_clean['MA60'] = df_clean['Close'].rolling(window=60).mean()  # 長期：季線
-        
-        # 計算 RSI (14)
-        delta = df_clean['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df_clean['RSI'] = 100 - (100 / (1 + rs))
-
-        # 根據使用者選擇的時間範圍過濾最終顯示的資料
-        target_period = period_mapping[period_display]
-        days_dict = {"1mo": 22, "3mo": 66, "6mo": 132, "1y": 252, "5y": 1260}
-        display_days = days_dict.get(target_period, 132)
-        
-        df_display = df_clean.tail(display_days)
-
-        if df_display.empty:
-            st.warning("⚠️ 該區間內無有效的股票交易價格。")
-        else:
-            # 獲取最新狀態值
-            current_price = df_display['Close'].iloc[-1]
-            ma5_now = df_display['MA5'].iloc[-1]
-            ma20_now = df_display['MA20'].iloc[-1]
-            ma60_now = df_display['MA60'].iloc[-1]
-            rsi_now = df_display['RSI'].iloc[-1]
-            
-            if len(df_display) > 1:
-                price_change = df_display['Close'].iloc[-1] - df_display['Close'].iloc[-2]
-                pct_change = (price_change / df_display['Close'].iloc[-2]) * 100
-            else:
-                price_change, pct_change = 0.0, 0.0
-
-            # 頂部三大關鍵指標卡片
-            col1, col2, col3 = st.columns(3)
-            col1.metric("🏢 公司名稱", company_name)
-            col2.metric("💵 最新收盤價", f"${current_price:.2f} 元")
-            col3.metric("📈 今日漲跌幅", f"{price_change:+.2f} 元 ({pct_change:+.2f}%)")
-
-            st.markdown("---")
-
-            # 🔥 新增功能：短中長趨勢、買點、操作建議決策面板
-            st.subheader("🤖 量化分析與策略操作建議")
-            trend_col, signal_col, action_col = st.columns(3)
-
-            with trend_col:
-                st.markdown("#### 🔍 短中長趨勢診斷")
-                # 短期趨勢 (MA5 vs MA20)
-                if current_price >= ma5_now:
-                    st.success("🟢 **短期趨勢**：多頭強勢 (股價站上5日線)")
-                else:
-                    st.error("🔴 **短期趨勢**：弱勢修正 (股價跌破5日線)")
-                
-                # 中期趨勢 (MA20 月線)
-                if current_price >= ma20_now:
-                    st.success("🟢 **中期趨勢**：月線支撐 (波段偏多走勢)")
-                else:
-                    st.error("🔴 **中期趨勢**：月線壓制 (波段面臨回檔)")
-                
-                # 長期趨勢 (MA60 季線)
-                if np.isnan(ma60_now):
-                    st.warning("⚪ **長期趨勢**：歷史資料不足以計算季線")
-                elif current_price >= ma60_now:
-                    st.success("🟢 **長期趨勢**：季線之上 (長線牛市格局)")
-                else:
-                    st.error("🔴 **長期趨勢**：季線之下 (長線熊市或大型調整)")
-
-            with signal_col:
-                st.markdown("#### 🎯 買賣點訊號提示")
-                if np.isnan(rsi_now):
-                    st.info("💡 RSI 指標計算中...")
-                else:
-                    st.write(f"📊 **目前 RSI (14) 指數**：`{rsi_now:.1f}`")
-                    if rsi_now >= 70:
-                        st.markdown("<span style='color:red; font-weight:bold;'>⚠️ 訊號：市場過熱 (過度買超)</span>", unsafe_allow_html=True)
-                        st.caption("🚨 股價進入短期高檔技術超買區，請留意追高風險。")
-                    elif rsi_now <= 30:
-                        st.markdown("<span style='color:green; font-weight:bold;'>✅ 訊號：打底浮現 (過度賣超)</span>", unsafe_allow_html=True)
-                        st.caption("💰 股價進入恐慌超賣區，通常是價值投資人分批尋找左側買點的時機。")
-                    else:
-                        st.markdown("<span>⚖️ 訊號：中性震盪</span>", unsafe_allow_html=True)
-                        st.caption("🔄 目前市場買賣力道均衡，適合觀察均線扣高或突破方向。")
-
-            with action_col:
-                st.markdown("#### 💡 整合操作策略建議")
-                # 簡單決策樹邏輯
-                if current_price >= ma20_now and (rsi_now < 70 or np.isnan(rsi_now)):
-                    st.info("📋 **建議**：**順勢續抱 / 逢回拉回買進**")
-                    st.caption("基於中線多頭架構未破，且技術面尚未過熱，可沿著月線或雙週線逢低分批布局，或維持原有部位續抱。")
-                elif current_price < ma20_now and rsi_now <= 35:
-                    st.info("📋 **建議**：**尋求左側支撐 / 分批低接**")
-                    st.caption("股價雖跌破月線，但已高度超賣。適合長線投資人依季線或前低支撐，實施分批金字塔式逢低配置。")
-                elif rsi_now >= 70:
-                    st.info("📋 **建議**：**落袋為安 / 分批停利**")
-                    st.caption("短線情緒極度亢奮。建議不宜開槓桿追高，短線交易者可考慮調節部分獲利，靜待拉回均線再重新布局。")
-                else:
-                    st.info("📋 **建議**：**空手者觀望 / 持股者中性看待**")
-                    st.caption("目前趨勢與動能不明顯，可靜待股價回檔至關鍵均線（如月線、季線）有守時，再進場建立基本部位。")
-
-            st.markdown("---")
-
-            # 5. 使用 Plotly 繪製中文化互動 K 線圖 (同步加入 MA 均線線條)
-            fig = go.Figure()
-            
-            # K線主體
-            fig.add_trace(go.Candlestick(
-                x=df_display.index,
-                open=df_display['Open'],
-                high=df_display['High'],
-                low=df_display['Low'],
-                close=df_display['Close'],
-                increasing_line_color='red',    # 台灣習慣：漲紅
-                decreasing_line_color='green',  # 台灣習慣：跌綠
-                name="K線走勢"
-            ))
-            
-            # 疊加均線
-            fig.add_trace(go.Scatter(x=df_display.index, y=df_display['MA5'], mode='lines', line=dict(color='orange', width=1.5), name='5日均線(週)'))
-            fig.add_trace(go.Scatter(x=df_display.index, y=df_display['MA20'], mode='lines', line=dict(color='purple', width=1.5), name='20日均線(月)'))
-            if not np.isnan(ma60_now):
-                fig.add_trace(go.Scatter(x=df_display.index, y=df_display['MA60'], mode='lines', line=dict(color='blue', width=1.5), name='60日均線(季)'))
-            
-            fig.update_layout(
-                title=f"📊 {company_name} 歷史 K 線技術指標圖 ({period_display})",
-                xaxis_title="交易日期",
-                yaxis_title="股價 (元)",
-                xaxis_rangeslider_visible=False,
-                template="plotly_white",
-                hovermode="x unified"
-            )
-            
-            st.plotly_chart(fig, width="stretch")
-
-            # 顯示原始數據表格
-            st.markdown("---")
-            st.subheader("📋 近 10 筆歷史交易明細")
-            
-            df_chinese = df_display.copy()
-            df_chinese['交易日期'] = [f"{d.strftime('%Y-%m-%d')} ({WEEK_DAYS_TW[d.weekday()]})" for d in df_chinese.index]
-            
             if is_taiwan_stock:
-                df_chinese['成交量(張)'] = (df_chinese['Volume'] / 1000).round(1)
-                volume_col = '成交量(張)'
-            else:
-                df_chinese['成交量(萬股)'] = (df_chinese['Volume'] / 10000).round(1)
-                volume_col = '成交量(萬股)'
+                pure_code = ticker_upper.replace(".TW", "").replace(".TWO", "")
+                if pure_code in twstock.codes:
+                    company_name = twstock.codes[pure_code].name
+            
+            if company_name == "未知公司" and info:
+                company_name = info.get("longName", info.get("shortName", ticker_upper))
 
-            df_chinese = df_chinese.rename(columns={
-                'Open': '開盤價',
-                'High': '最高價',
-                'Low': '最低價',
-                'Close': '收盤價'
-            })
+        # --- 5. 計算量化指標 ---
+        df['MA5'] = df['Close'].rolling(window=5).mean()
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['MA60'] = df['Close'].rolling(window=60).mean()
+
+        # 根據用戶選擇的時間範圍，截取前端要顯示的資料量
+        if period_display == "近 1 個月":
+            df_display = df.last("30D")
+        elif period_display == "近 3 個月":
+            df_display = df.last("90D")
+        elif period_display == "近 6 個月":
+            df_display = df.last("180D")
+        elif period_display == "近 1 年":
+            df_display = df.last("365D")
+        else:
+            df_display = df
+
+        # 取得最新一筆與前一筆數據
+        latest_data = df_display.iloc[-1]
+        prev_data = df_display.iloc[-2]
+        
+        close_price = float(latest_data['Close'])
+        prev_close = float(prev_data['Close'])
+        price_change = close_price - prev_close
+        price_change_pct = (price_change / prev_close) * 100
+        volume = float(latest_data['Volume'])
+
+        # --- 6. 頂部儀表板數據呈現 (KPI Metrics) ---
+        st.subheader(f"📊 {company_name} ({ticker_upper}) 即時核心指標")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric(
+            label="最新收盤價", 
+            value=f"${close_price:.2f}" if not is_taiwan_stock else f"{close_price:.2f} TWD",
+            delta=f"{price_change:.2f} ({price_change_pct:.2f}%)"
+        )
+        col2.metric(label="當日最高價", value=f"{latest_data['High']:.2f}")
+        col3.metric(label="當日最低價", value=f"{latest_data['Low']:.2f}")
+        col4.metric(label="當日成交量", value=f"{volume:,.0f} 股")
+
+        # --- 7. 繪製互動式 K 線圖與均線 ---
+        st.subheader("📈 技術分析 K 線圖 (包含 5MA / 20MA / 60MA)")
+        
+        fig = go.Figure()
+        
+        fig.add_trace(go.Candlestick(
+            x=df_display.index,
+            open=df_display['Open'],
+            high=df_display['High'],
+            low=df_display['Low'],
+            close=df_display['Close'],
+            name="K線",
+            increasing_line_color='red' if is_taiwan_stock else 'green',
+            decreasing_line_color='green' if is_taiwan_stock else 'red'
+        ))
+        
+        fig.add_trace(go.Scatter(x=df_display.index, y=df_display['MA5'], mode='lines', name='5MA (週線)', line=dict(color='orange', width=1.5)))
+        fig.add_trace(go.Scatter(x=df_display.index, y=df_display['MA20'], mode='lines', name='20MA (月線)', line=dict(color='magenta', width=1.5)))
+        fig.add_trace(go.Scatter(x=df_display.index, y=df_display['MA60'], mode='lines', name='60MA (季線)', line=dict(color='cyan', width=1.5)))
+        
+        fig.update_layout(
+            xaxis_rangeslider_visible=False,
+            template="plotly_dark",
+            margin=dict(l=20, r=20, t=20, b=20),
+            height=500
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # --- 8. AI 模擬量化決策系統 ---
+        st.subheader("🤖 智能 AI 量化決策面板")
+        
+        ma5_now = latest_data['MA5']
+        ma20_now = latest_data['MA20']
+        ma60_now = latest_data['MA60']
+        
+        signals = []
+        score = 0
+        
+        if ma5_now > ma20_now:
+            signals.append("🟢 短期趨勢偏多：5MA 位在 20MA 之上（黃金交叉）。")
+            score += 1
+        else:
+            signals.append("🔴 短期趨勢偏空：5MA 位在 20MA 之下（死亡交叉）。")
+            score -= 1
             
-            # 將均線加入顯示清單
-            show_df = df_chinese[['交易日期', '開盤價', '最高價', '最低價', '收盤價', 'MA5', 'MA20', volume_col]].tail(10)
-            show_df = show_df.set_index('交易日期').sort_index(ascending=False)
-            
-            st.dataframe(show_df, width="stretch")
+        if close_price > ma60_now:
+            signals.append("🟢 長期支撐強勁：股價站穩 60MA (季線) 生命線之上。")
+            score += 1
+        else:
+            signals.append("🔴 長期趨勢轉弱：股價跌破 60MA (季線) 生命線。")
+            score -= 1
+
+        volume_ma20 = df_display['Volume'].rolling(window=20).mean().iloc[-1]
+        if volume > volume_ma20 * 1.2:
+            signals.append("🟢 動能增溫：今日成交量高於 20 日平均量 20% 以上，屬於爆量結構。")
+            score += 1
+        elif volume < volume_ma20 * 0.8:
+            signals.append("⚪ 動能停滯：今日成交量低於 20 日平均量 20% 以上，市場觀望氣氛濃。")
+
+        ai_col1, ai_col2 = st.columns(2)
+        
+        with ai_col1:
+            st.markdown("### 🚦 綜合決策建議")
+            if score >= 2:
+                st.success("🔥 強勢多頭 (強力買入)")
+            elif score == 1:
+                st.info("👍 偏多震盪 (逢低佈局)")
+            elif score == 0:
+                st.warning("⏳ 趨勢不明 (觀望現金為王)")
+            else:
+                st.error("🚨 弱勢空頭 (建議避開/反向思考)")
+                
+        with ai_col2:
+            st.markdown("### 📝 量化數據診斷報告")
+            for sig in signals:
+                st.markdown(sig)
 
 except Exception as e:
-    st.error(f"⚠️ 系統抓取時發生錯誤: {e}")
-    st.info("💡 提示：如果查詢台股，請務必在代號後方加上後綴。例如：台積電請輸入 '2330.TW'、鴻海請輸入 '2317.TW'")
+    st.error(f"⚠️ 系統執行發生錯誤: {e}")
+    st.info("提示：由於 Streamlit 雲端共享 IP 容易觸發 Yahoo Finance 防爬蟲機制，若持續出現此錯誤，建議等幾分鐘後重新整理，或在本地端（Localhost）執行將完全正常。")
