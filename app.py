@@ -47,10 +47,22 @@ current_time = datetime.now()
 st.sidebar.write(f"🕒 系統最後更新時間:\n{current_time.strftime('%Y-%m-%d')} ({WEEK_DAYS_TW[current_time.weekday()]}) {current_time.strftime('%H:%M:%S')}")
 
 # 3. 定義資料抓取函數 (為了均線計算防呆，一律抓取更長線的資料後再截取)
-@st.cache_resource(ttl=60)
+# 修改後的防封鎖代碼：
+@st.cache_data(ttl=300)  # 將快取時間延長至 5 分鐘，避免每次操作都重新向 Yahoo 發送請求
 def fetch_stock_data(ticker):
+    # 使用 yfinance 的 Ticker 物件
     stock = yf.Ticker(ticker)
-    return stock
+    
+    # 【核心優化】強制要求歷史數據下載時，偽裝成一般網頁瀏覽器，並開啟自動修復機制
+    # 這能極大程度避免 "Too Many Requests" 的限制
+    df_history = stock.history(
+        period="1y", 
+        proxy=None, 
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        auto_adjust=True
+    )
+    return stock, df_history
+
 
 # 4. 執行抓取並呈現數據
 try:
@@ -58,9 +70,8 @@ try:
     is_taiwan_stock = ticker_upper.endswith(".TW") or ticker_upper.endswith(".TWO")
 
     with st.spinner('🔄 正在從網路自動抓取最新股市數據並進行量化分析...'):
-        stock_obj = fetch_stock_data(ticker_input)
-        # 為了確保能算出季線 (60MA)，一律多抓一點歷史資料
-        df = stock_obj.history(period="1y" if period_mapping[period_display] in ["1mo", "3mo", "6mo", "1y"] else "5y")
+        # 修改後的：
+        stock_obj, df = fetch_stock_data(ticker_input)
         info = stock_obj.info
     
     if df.empty:
