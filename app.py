@@ -31,16 +31,14 @@ st.sidebar.write(f"🕒 系統最後更新時間:\n{current_time.strftime('%Y-%m
 # 3. 備用安全沙盒模式
 def get_sandbox_backup_data(stock_id):
     """
-    自建模擬量化沙盒，利用統計學模型仿真歷史價格，作為官方 API 維護時的防禦機制。
+    自建模擬量化沙盒，作為官方 API 維護時的防禦機制。
     """
     np.random.seed(int(stock_id) if stock_id.isdigit() else 2330)
     company_name = "台積電" if stock_id == "2330" else f"個股 {stock_id}"
     
-    # 仿真 150 天的技術分析歷史數據
     date_range = pd.date_range(end=datetime.now(), periods=150, freq='B')
     base_price = 1000.0 if stock_id == "2330" else 150.0
     
-    # 隨機漫步模擬真實波段
     changes = np.random.normal(loc=0.0002, scale=0.012, size=150)
     price_series = base_price * np.exp(np.cumsum(changes))
     
@@ -57,42 +55,44 @@ def get_sandbox_backup_data(stock_id):
 @st.cache_data(ttl=600)  # 快取 10 分鐘
 def fetch_official_twse_openapi(stock_id):
     """
-    介接臺灣證券交易所（TWSE）及櫃買中心官方 OpenAPI。
+    介接臺灣證券交易所（TWSE）及櫃買中心官方 OpenAPI，並保證語法絕對安全。
     """
     url_twse = "https://twse.com.tw"
     url_tpex = "https://tpex.org.tw"
+    headers = {'User-Agent': 'Mozilla/5.0'}
     
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
+    target_rows = []
+    company_name = f"台股 {stock_id}"
     
+    # 步驟一：嘗試向證交所（上市通道）請求
     try:
-        # 1. 先嘗試上市通道
-        response = requests.get(url_twse, headers=headers, timeout=12)
-        target_rows = []
-        company_name = f"台股 {stock_id}"
+        res = requests.get(url_twse, headers=headers, timeout=10)
+        if res.status_code == 200:
+            target_rows = [row for row in res.json() if row.get('Code') == stock_id]
+    except Exception:
+        pass
         
-        if response.status_code == 200:
-            data = response.json()
-            target_rows = [row for row in data if row.get('Code') == stock_id]
+    # 步驟二：若上市通道無資料，嘗試向櫃買中心（上櫃通道）請求
+    if not target_rows:
+        try:
+            res_tpex = requests.get(url_tpex, headers=headers, timeout=10)
+            if res_tpex.status_code == 200:
+                target_rows = [row for row in res_tpex.json() if row.get('Code') == stock_id]
+        except Exception:
+            pass
             
-        # 2. 上市找不到，嘗試上櫃通道
-        if not target_rows:
-            response_tpex = requests.get(url_tpex, headers=headers, timeout=12)
-            if response_tpex.status_code == 200:
-                data_tpex = response_tpex.json()
-                target_rows = [row for row in data_tpex if row.get('Code') == stock_id]
-                
-        if not target_rows:
-            return pd.DataFrame(), company_name
-            
-        # 建立 DataFrame
+    # 步驟三：若皆無資料，直接回傳空 DataFrame 觸發主程式沙盒機制
+    if not target_rows:
+        return pd.DataFrame(), company_name
+        
+    # 步驟四：資料解析與清洗
+    try:
         df_raw = pd.DataFrame(target_rows)
         
-        # 🟢 徹底修正：安全提取公司名稱，避免引發縮進語法 Bug
-        if 'Name' in df_raw.columns and not df_raw['Name'].empty:
+        # 安全獲取名稱
+        if 'Name' in df_raw.columns and len(df_raw) > 0:
             company_name = str(df_raw['Name'].values[0])
-        
+            
         df_clean = pd.DataFrame()
         df_clean['Open'] = pd.to_numeric(df_raw['OpenPrice'].astype(str).str.replace(',', ''), errors='coerce')
         df_clean['High'] = pd.to_numeric(df_raw['HighPrice'].astype(str).str.replace(',', ''), errors='coerce')
@@ -110,9 +110,8 @@ def fetch_official_twse_openapi(stock_id):
         df_clean.ffill(inplace=True)
         
         return df_clean, company_name
-        
     except Exception:
-        return pd.DataFrame(), f"台股 {stock_id}"
+        return pd.DataFrame(), company_name
 
 # 5. 主程式流程
 try:
@@ -267,3 +266,5 @@ try:
         else:
             st.markdown(f"🚨 **保命停損確認 (月線 / 20MA)**：`{ma20_now:.2f}` (已全線跌破！不可盲目摸底承接)")
 
+except Exception as e:
+    st.error(f"💥 系統發生狀況，已攔截處理: {e}")
