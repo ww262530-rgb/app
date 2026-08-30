@@ -89,9 +89,9 @@ def fetch_official_twse_openapi(stock_id):
         # 建立 DataFrame
         df_raw = pd.DataFrame(target_rows)
         
-        # 修正後的安全公司名稱提取語法
+        # 🟢 徹底修正：安全提取公司名稱，避免引發縮進語法 Bug
         if 'Name' in df_raw.columns and not df_raw['Name'].empty:
-            company_name = str(df_raw['Name'].iloc[0])
+            company_name = str(df_raw['Name'].values[0])
         
         df_clean = pd.DataFrame()
         df_clean['Open'] = pd.to_numeric(df_raw['OpenPrice'].astype(str).str.replace(',', ''), errors='coerce')
@@ -267,4 +267,3 @@ try:
         else:
             st.markdown(f"🚨 **保命停損確認 (月線 / 20MA)**：`{ma20_now:.2f}` (已全線跌破！不可盲目摸底承接)")
 
-except Exception as e:
