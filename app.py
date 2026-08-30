@@ -45,7 +45,7 @@ def fetch_twse_openapi_data(stock_id):
             return pd.DataFrame(), f"代號 {stock_id}"
             
         df = pd.DataFrame(target_rows)
-        company_name = target_rows[0].get('Name', f"台股 {stock_id}")
+        company_name = target_rows[0].get('Name', f"台股 {stock_id}") if isinstance(target_rows, list) else f"台股 {stock_id}"
         
         df_clean = pd.DataFrame()
         df_clean['Open'] = pd.to_numeric(df['OpenPrice'].str.replace(',', ''), errors='coerce')
@@ -124,13 +124,15 @@ try:
     fig.update_layout(xaxis_rangeslider_visible=False, template="plotly_dark", height=450)
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 8. 💥 完全還原：第一版量化分析與策略操作建議 💥 ---
+    # --- 8. 量化分析與策略操作建議 ---
     st.markdown("### 🎯 量化分析與策略操作建議")
     
     # 計算量化邏輯數值
-    ma5_now, ma20_now, ma60_now = latest_data['MA5'], latest_data['MA20'], latest_data['MA60']
+    ma5_now = float(latest_data['MA5'])
+    ma20_now = float(latest_data['MA20'])
+    ma60_now = float(latest_data['MA60'])
     
-    # 計算簡單的模擬 RSI 指標以完美對齊圖片外觀
+    # 計算 RSI(14)
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -161,23 +163,33 @@ try:
         else:
             st.error("🔴 **長期趨勢**：季線之下 (長線熊市格局)")
 
-    # 欄位二：買賣點訊號提示
+    # 欄位二：買賣點訊號提示 (加入放空評估邏輯)
     with ai_col2:
         st.markdown("#### 🎯 買賣點訊號提示")
         st.markdown(f"📊 **目前 RSI (14) 指數**：`{rsi_val:.1f}`")
         
-        # 依據 RSI 判斷訊號
+        # 依據 RSI 與均線結構判斷訊號
         if rsi_val > 70:
             st.markdown("⚖️ **訊號**：高檔超買")
-            st.markdown("ℹ️ 目前市場買氣過熱，留意短線獲利回吐賣壓。")
         elif rsi_val < 30:
             st.markdown("⚖️ **訊號**：低檔超賣")
-            st.markdown("ℹ️ 目前市場過度悲觀，短期打底有機會迎來反彈。")
         else:
             st.markdown("⚖️ **訊號**：中性震盪")
-            st.markdown("ℹ️ 目前市場買賣力量均衡，適合觀察均線扣高或突破方向。")
+            
+        st.markdown("---")
+        # ⚡ 核心新增：放空條件評估
+        st.markdown("📉 **放空可行性評估**")
+        if close_price < ma20_now and ma5_now < ma20_now:
+            st.warning("⚠️ **評估結果：允許順勢放空**")
+            st.caption("原因：股價跌破月線且週線與月線呈現死亡交叉，空頭排列成形，適合弱勢股避險或放空操作。")
+        elif rsi_val > 75:
+            st.warning("⚠️ **評估結果：可考慮右側左高放空**")
+            st.caption("原因：技術指標進入極度超買區，短線乖離率過高，可待出現黑 K 訊號後進行短線反向放空。")
+        else:
+            st.info("⚪ **評估結果：暫不建議放空**")
+            st.caption("原因：目前股價仍受核心均線支撐，或處於中性震盪箱型內，此時放空極易被軋空，應以觀望或順勢做多為主。")
 
-    # 欄位三：整合操作策略建議
+    # 欄位三：整合操作策略建議 (精準回填週線買點與月線停損價位)
     with ai_col3:
         st.markdown("#### 💡 整合操作策略建議")
         
@@ -189,13 +201,20 @@ try:
         
         if score >= 2:
             st.info("📋 **建議：順勢續抱 / 逢回拉回買進**")
-            st.caption("基於中線多頭架構未破，且技術面尚未過熱，可沿著月線或雙週線逢低分批布局，或維持原有部位續抱。")
+            st.caption("基於中線多頭架構未破，且技術面尚未過熱，可維持原有部位續抱。")
         elif score == 1:
             st.warning("📋 **建議：區間操作 / 觀望縮小部位**")
             st.caption("多空訊號交織，趨勢進入方向調整期。建議拉大操作區間，切勿頻繁追高殺低。")
         else:
             st.error("📋 **建議：保守減碼 / 現金為王防禦**")
             st.caption("均線呈現空頭排列且跌破生命線，應嚴格執行停損，保留資金靜待下一次打底訊號出現。")
+            
+        st.markdown("---")
+        # ⚡ 核心還原與串接：將圖片中的 Excel 欄位資訊動態數據化
+        st.markdown("📐 **量化價位參考點**")
+        st.markdown(f"🟢 **建議波段買點 (週線 / 5MA)**：`{ma5_now:.2f}`")
+        st.markdown(f"🔴 **建議保命停損 (月線 / 20MA)**：`{ma20_now:.2f}`")
+        st.caption("💡 操作提示：若想進場佈局，可待價格拉回至週線附近承接；若不幸跌破月線則應嚴格執行保命停損。")
 
 except Exception as e:
     st.error(f"💥 系統初始化異常: {e}")
