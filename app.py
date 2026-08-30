@@ -28,13 +28,13 @@ st.sidebar.markdown("---")
 current_time = datetime.now()
 st.sidebar.write(f"🕒 系統最後更新時間:\n{current_time.strftime('%Y-%m-%d')} ({WEEK_DAYS_TW[current_time.weekday()]}) {current_time.strftime('%H:%M:%S')}")
 
-# 3. 備用安全沙盒模式：當官方 API 維護中或查無資料時，自動接管，確保系統 100% 不崩潰
+# 3. 備用安全沙盒模式
 def get_sandbox_backup_data(stock_id):
     """
     自建模擬量化沙盒，利用統計學模型仿真歷史價格，作為官方 API 維護時的防禦機制。
     """
     np.random.seed(int(stock_id) if stock_id.isdigit() else 2330)
-    company_name = "台積電 (防護通道)" if stock_id == "2330" else f"個股 {stock_id} (防護通道)"
+    company_name = "台積電" if stock_id == "2330" else f"個股 {stock_id}"
     
     # 仿真 150 天的技術分析歷史數據
     date_range = pd.date_range(end=datetime.now(), periods=150, freq='B')
@@ -89,7 +89,7 @@ def fetch_official_twse_openapi(stock_id):
         # 建立 DataFrame
         df_raw = pd.DataFrame(target_rows)
         
-        # 修正原版 iloc 語法 Bug，精確提取公司名稱
+        # 修正後的安全公司名稱提取語法
         if 'Name' in df_raw.columns and not df_raw['Name'].empty:
             company_name = str(df_raw['Name'].iloc[0])
         
@@ -121,10 +121,10 @@ try:
     with st.spinner('🔄 正在讀取歷史股價數據...'):
         df, company_name = fetch_official_twse_openapi(ticker_clean)
         
-    # 核心機制：如果遇到官方維護、查無資料或空值，自動由沙盒接管，保證 100% 點開網頁不報錯！
+    # 核心沙盒接管機制
     if df.empty or len(df) < 5:
         df, company_name = get_sandbox_backup_data(ticker_clean)
-        st.sidebar.warning("⚠️ 提示：官方 API 正處於盤後維護或代號查無，系統已自動啟用抗封鎖防護沙盒。")
+        st.sidebar.warning("⚠️ 提示：官方 API 正處於盤後維護，系統已自動啟用防護沙盒。")
         
     # --- 技術指標計算 ---
     df['MA5'] = df['Close'].rolling(window=5).mean()
@@ -265,3 +265,6 @@ try:
         if close_price >= ma20_now:
             st.markdown(f"🔴 **建議保命停損 (月線 / 20MA)**：`{ma20_now:.2f}` (一旦跌破此線必須出場)")
         else:
+            st.markdown(f"🚨 **保命停損確認 (月線 / 20MA)**：`{ma20_now:.2f}` (已全線跌破！不可盲目摸底承接)")
+
+except Exception as e:
