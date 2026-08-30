@@ -255,12 +255,22 @@ try:
             elif score == 1:
                 st.warning("📋 **建議：區間操作 / 觀望縮小部位**")
 st.caption("指標交織，個股進入整理期。建議拉大買賣價位，切勿追漲殺跌。")
-else:st.error("📋 建議：保守減碼 / 現金為王防禦")
+else:
+st.error("📋 建議：保守減碼 / 現金為王防禦")
 st.caption("均線全面空頭排列並跌破季線生命線，應做好風控、反彈減碼、嚴守交易紀律。")
+
 st.markdown("---")
-st.markdown("📐 量化價位參考點")if close_price >= ma5_now:
-st.markdown(f"🟢 建議波段買點 (週線 / 5MA)：{ma5_now:.2f} (現價在線上，拉回不破可分批)")else:
-st.markdown(f"⏳ 右側確認買點 (週線 / 5MA)：{ma5_now:.2f} (現價在線下，需突破此價位方可進場)")if close_price >= ma20_now:
-st.markdown(f"🔴 建議保命停損 (月線 / 20MA)：{ma20_now:.2f} (一旦跌破此線必須出場)")else:
-st.markdown(f"🚨 保命停損確認 (月線 / 20MA)：{ma20_now:.2f} (已全線跌破！不可盲目摸底承接)")except Exception as e:
+st.markdown("📐 量化價位參考點")
+
+if close_price >= ma5_now:
+st.markdown(f"🟢 建議波段買點 (週線 / 5MA)：{ma5_now:.2f} (現價在線上，拉回不破可分批)")
+else:
+st.markdown(f"⏳ 右側確認買點 (週線 / 5MA)：{ma5_now:.2f} (現價在線下，需突破此價位方可進場)")
+
+if close_price >= ma20_now:
+st.markdown(f"🔴 建議保命停損 (月線 / 20MA)：{ma20_now:.2f} (一旦跌破此線必須出場)")
+else:
+st.markdown(f"🚨 保命停損確認 (月線 / 20MA)：{ma20_now:.2f} (已全線跌破！不可盲目摸底承接)")
+
+except Exception as e:
 st.error(f"💥 系統解析異常: {e}")
